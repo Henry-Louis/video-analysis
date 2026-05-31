@@ -540,6 +540,12 @@ function seekTo(sec) {
 }
 
 // ---------- 功能一：生成字幕 ----------
+// 解析后端错误响应：FastAPI 的 HTTPException 返回 {"detail": "..."}
+async function errDetail(r) {
+  const t = await r.text();
+  try { return JSON.parse(t).detail || t; } catch (_) { return t; }
+}
+
 $("transcribeBtn").onclick = async () => {
   if (!hasVideo()) return alert("请先加载视频");
   const restore = beginBtn($("transcribeBtn"), "生成中…");
@@ -550,7 +556,16 @@ $("transcribeBtn").onclick = async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentVideoId ? { id: currentVideoId } : { video: currentVideoPath }),
     });
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) {
+      const detail = await errDetail(r);
+      // 未配置 API Key：给明确提示并自动打开设置面板，引导用户去填
+      if (r.status === 400 && /key/i.test(detail)) {
+        setStatus(detail, false, true);
+        openSettings();
+        return;
+      }
+      throw new Error(detail);
+    }
     const data = await r.json();
     cues = data.cues || [];
     renderCues();

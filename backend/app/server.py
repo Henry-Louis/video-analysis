@@ -93,6 +93,11 @@ def _resolve_video(vid: str | None, video: str | None) -> str:
 @app.post("/transcribe")
 def do_transcribe(req: TranscribeReq):
     video = _resolve_video(req.id, req.video)
+    if not (cfg.get_api_key() or os.getenv("DASHSCOPE_API_KEY")):
+        raise HTTPException(
+            400,
+            "尚未配置 DashScope API Key —— 请点右上角 ⚙️ 设置，填入你的阿里云百炼 API Key 后重试。",
+        )
     base = _base(video)
     wav = os.path.join(WORK, base + ".wav")
     extract_audio(video, wav)
