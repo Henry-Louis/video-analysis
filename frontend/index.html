@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>视频分析</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>视频分析</h1>
+    <details class="adv">
+      <summary>高级：手动输入路径</summary>
+      <div class="loader">
+        <input id="videoPath" type="text" placeholder="视频绝对路径，例如 /Users/you/clip.mp4" />
+        <button id="loadBtn">加载视频</button>
+      </div>
+    </details>
+  </header>
+
+  <main>
+    <section class="left">
+      <div class="stage" id="stage">
+        <video id="video" playsinline></video>
+        <div id="subtitle" class="subtitle"></div>
+        <div id="overlay" class="overlay"></div>
+        <div id="regionBox" class="region-box hidden">
+          <span class="handle nw"></span><span class="handle n"></span><span class="handle ne"></span>
+          <span class="handle w"></span><span class="handle e"></span>
+          <span class="handle sw"></span><span class="handle s"></span><span class="handle se"></span>
+        </div>
+
+        <!-- 自定义播放控制条 -->
+        <div id="controls" class="controls hidden">
+          <button id="playBtn" class="ctl-btn" title="播放 / 暂停" aria-label="播放 / 暂停">
+            <svg class="ic-play" viewBox="0 0 24 24" width="18" height="18"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            <svg class="ic-pause hidden" viewBox="0 0 24 24" width="18" height="18"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
+          </button>
+          <div id="seek" class="seek"><div id="seekFill" class="seek-fill"></div></div>
+          <span id="timeLabel" class="time-label">0:00 / 0:00</span>
+        </div>
+
+        <!-- 空状态 / 拖拽落区 -->
+        <div id="emptyState" class="empty-state">
+          <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+            <rect x="6" y="14" width="52" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="2.5"/>
+            <path d="M27 26l12 6-12 6z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+          </svg>
+          <div class="empty-title">把视频拖进来</div>
+          <div class="empty-sub">或点此选择文件</div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button id="transcribeBtn">生成字幕</button>
+        <button id="regionModeBtn">框选区域</button>
+        <button id="ocrBtn" class="hidden">开始分析这块区域 ▶</button>
+        <span id="regionInfo" class="muted"></span>
+      </div>
+
+      <div class="status-wrap">
+        <div class="status" id="status"></div>
+        <div id="progress" class="progress hidden"><div class="progress-bar"></div></div>
+      </div>
+    </section>
+
+    <section class="right">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>字幕</h2>
+          <span id="subExport" class="export hidden">
+            导出 <a id="srtLink" href="#" download="subtitle.srt">SRT</a> ·
+            <a id="vttLink" href="#" download="subtitle.vtt">VTT</a>
+          </span>
+        </div>
+        <ul id="cueList" class="cue-list"><li class="empty-hint">加载视频后点「生成字幕」开始。</li></ul>
+      </div>
+
+      <div class="panel">
+        <h2>画面区域</h2>
+        <div id="ocrResult" class="ocr-result empty-hint">框选一个区域，再点「开始分析」。</div>
+      </div>
+    </section>
+  </main>
+
+  <input id="filePicker" type="file" accept="video/*" hidden />
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# ===== 功能一：语音识别（阿里云百炼 Paraformer，云端，带时间戳） =====
+dashscope>=1.20.0
+
+# ===== Web 服务（前端通过 localhost 调用） =====
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+python-dotenv
+
+# ===== 功能二：本地中文 OCR（PaddleOCR，首次运行自动下载 PP-OCRv5 模型） =====
+paddlepaddle>=3.0
+paddleocr>=3.0
+
+# 注：视频抽帧/抽音轨/烧字幕用系统的 ffmpeg-full（带 libass），
+#     见 README「环境依赖」。

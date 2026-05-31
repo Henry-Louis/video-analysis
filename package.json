@@ -1,0 +1,13 @@
+{
+  "name": "video-analysis",
+  "version": "0.1.0",
+  "description": "上传视频，生成字幕（功能一）+ 框选区域定时 OCR（功能二）的 Mac 桌面工具",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.0",
+    "electron": "^33.2.0"
+  }
+}

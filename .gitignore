@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 密钥 / 环境变量（务必不要提交）
+.env
+backend/.env
+
+# 模型与缓存
+models/
+.cache/
+
+# Node / Electron
+node_modules/
+dist/
+out/
+
+# 运行时产生的媒体与中间文件
+uploads/
+work/
+
+# 个人样本视频（含人脸，不公开）
+sample/
+
+# 本地编辑器 / 工具配置
+.claude/
+
+# 编译产物
+native/vision-ocr/vision-ocr
+
+# OS
+.DS_Store
