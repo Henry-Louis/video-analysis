@@ -8,14 +8,25 @@
 </head>
 <body>
   <header>
-    <h1>视频分析</h1>
-    <details class="adv">
+    <!-- 返回库（仅分析视图显示） -->
+    <button id="backToLibraryBtn" class="ghost-btn hidden" title="返回视频库" aria-label="返回视频库">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      返回库
+    </button>
+
+    <h1 id="appTitle">视频库</h1>
+
+    <!-- 手动路径（仅分析视图的高级入口；导入走库视图） -->
+    <details id="advLoader" class="adv hidden">
       <summary>高级：手动输入路径</summary>
       <div class="loader">
         <input id="videoPath" type="text" placeholder="视频绝对路径，例如 /Users/you/clip.mp4" />
         <button id="loadBtn">加载视频</button>
       </div>
     </details>
+
     <button id="settingsBtn" class="icon-btn" title="设置" aria-label="设置">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
         <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" fill="none" stroke="currentColor" stroke-width="1.8"/>
@@ -60,7 +71,45 @@
     </div>
   </div>
 
-  <main>
+  <!-- ============ 视图一：视频库（默认） ============ -->
+  <main id="libraryView" class="library-view">
+    <div class="library-bar">
+      <div class="search-wrap">
+        <svg class="search-ic" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M16.5 16.5L21 21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <input id="librarySearch" type="search" placeholder="搜索视频…" autocomplete="off" spellcheck="false" />
+      </div>
+      <button id="importBtn" class="btn-primary">导入视频</button>
+    </div>
+
+    <!-- 拖拽落区包住网格，整页可拖入 -->
+    <div id="libraryDrop" class="library-drop">
+      <div id="libraryGrid" class="library-grid"></div>
+
+      <!-- 空库引导 -->
+      <div id="libraryEmpty" class="library-empty hidden">
+        <svg viewBox="0 0 64 64" width="60" height="60" aria-hidden="true">
+          <rect x="6" y="14" width="52" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="2.5"/>
+          <path d="M27 26l12 6-12 6z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+        </svg>
+        <div class="empty-title">视频库还是空的</div>
+        <div class="empty-sub">把视频拖进来，或点「导入视频」选择文件</div>
+      </div>
+
+      <!-- 有视频但搜索无匹配 -->
+      <div id="libraryNoMatch" class="library-empty hidden">
+        <div class="empty-title">没有匹配的视频</div>
+        <div class="empty-sub">换个关键词试试</div>
+      </div>
+    </div>
+
+    <div id="libraryStatus" class="status library-status"></div>
+  </main>
+
+  <!-- ============ 视图二：分析（点卡片进入） ============ -->
+  <main id="analysisView" class="hidden">
     <section class="left">
       <div class="stage" id="stage">
         <video id="video" playsinline></video>
@@ -82,7 +131,7 @@
           <span id="timeLabel" class="time-label">0:00 / 0:00</span>
         </div>
 
-        <!-- 空状态 / 拖拽落区 -->
+        <!-- 空状态 / 拖拽落区（分析视图内仍保留，用于手动加载时的占位） -->
         <div id="emptyState" class="empty-state">
           <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
             <rect x="6" y="14" width="52" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="2.5"/>
@@ -125,6 +174,9 @@
     </section>
   </main>
 
+  <!-- 库视图导入用：选文件（Electron 渲染进程的 File 带绝对路径 .path） -->
+  <input id="libraryPicker" type="file" accept="video/*" hidden multiple />
+  <!-- 分析视图内手动加载用 -->
   <input id="filePicker" type="file" accept="video/*" hidden />
   <script src="app.js"></script>
 </body>

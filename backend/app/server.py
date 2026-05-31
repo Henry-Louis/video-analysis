@@ -1,10 +1,16 @@
 """本地 FastAPI 服务：把功能一/功能二包成 HTTP 接口，并托管前端静态页面。
 
-- GET  /health           健康检查
-- GET  /media?path=...   流式播放本地视频（支持 range/拖动）
-- POST /transcribe       功能一：视频 → 字幕 cue（可选烧录）
-- POST /ocr_region       功能二：区域定时 OCR → 去重事件 + 数字时序
-- GET  /                 前端页面（frontend/）
+- GET  /health                  健康检查
+- GET  /media?path=...          流式播放本地视频（支持 range/拖动）
+- POST /transcribe              功能一：视频 → 字幕 cue（兼容 {id} / 旧 {video}）
+- POST /ocr_region              功能二：区域定时 OCR → 去重事件 + 数字时序（兼容 {id} / 旧 {video}）
+- GET  /library                 视频库列表
+- POST /library/import          导入本地视频进库
+- PATCH/DELETE /library/{id}    改名 / 删除
+- GET  /library/{id}/thumb      缩略图
+- GET  /library/{id}/media      流式返回库内视频（支持 range）
+- GET  /library/{id}/result     读取缓存结果（kind=subtitles|heat）
+- GET  /                        前端页面（frontend/）
 """
 import os
 
@@ -28,6 +34,7 @@ from app.asr import transcribe                                # noqa: E402
 from app.subtitle import sentences_to_cues, to_srt, to_vtt    # noqa: E402
 from app.ocr import ocr_region_over_time, dedupe_lines, track_numbers  # noqa: E402
 from app import config as cfg                                 # noqa: E402
+from app import library as lib                                # noqa: E402
 
 app = FastAPI(title="video-analysis")
 app.add_middleware(
@@ -53,17 +60,31 @@ def media(path: str):
 
 
 class TranscribeReq(BaseModel):
-    video: str
+    id: str | None = None      # 库内视频 id（新）；结果会缓存到 results/subtitles.json
+    video: str | None = None   # 本地视频绝对路径（旧）；保持原行为
     burn: bool = False
+
+
+def _resolve_video(vid: str | None, video: str | None) -> str:
+    """统一解析视频路径：优先库内 id，其次旧的本地路径。返回绝对路径。"""
+    if vid:
+        path = lib.video_path(vid)
+        if not path:
+            raise HTTPException(404, f"库内视频不存在: {vid}")
+        return path
+    if video:
+        if not os.path.isfile(video):
+            raise HTTPException(404, f"视频不存在: {video}")
+        return video
+    raise HTTPException(400, "需要提供 id 或 video")
 
 
 @app.post("/transcribe")
 def do_transcribe(req: TranscribeReq):
-    if not os.path.isfile(req.video):
-        raise HTTPException(404, f"视频不存在: {req.video}")
-    base = _base(req.video)
+    video = _resolve_video(req.id, req.video)
+    base = _base(video)
     wav = os.path.join(WORK, base + ".wav")
-    extract_audio(req.video, wav)
+    extract_audio(video, wav)
     cues = sentences_to_cues(transcribe(wav))
 
     srt_path = os.path.join(WORK, base + ".srt")
@@ -76,13 +97,17 @@ def do_transcribe(req: TranscribeReq):
     subbed = None
     if req.burn:
         subbed = os.path.join(WORK, base + "_subbed.mp4")
-        burn_subtitles(req.video, srt_path, subbed)
+        burn_subtitles(video, srt_path, subbed)
 
-    return {"cues": cues, "srt_path": srt_path, "vtt_path": vtt_path, "subbed_path": subbed}
+    result = {"cues": cues, "srt_path": srt_path, "vtt_path": vtt_path, "subbed_path": subbed}
+    if req.id:
+        lib.save_result(req.id, "subtitles", result)  # 缓存供再次进入分析视图直接展示
+    return result
 
 
 class OcrReq(BaseModel):
-    video: str
+    id: str | None = None      # 库内视频 id（新）；结果会缓存到 results/heat.json
+    video: str | None = None   # 本地视频绝对路径（旧）；保持原行为
     region: list[int]          # [x, y, w, h]，原始视频像素坐标
     fps: float = 2.0
     min_score: float = 0.5    # Vision 置信度偏粗，0.5 是有效文本/噪声的甜区
@@ -90,18 +115,94 @@ class OcrReq(BaseModel):
 
 @app.post("/ocr_region")
 def do_ocr(req: OcrReq):
-    if not os.path.isfile(req.video):
-        raise HTTPException(404, f"视频不存在: {req.video}")
+    video = _resolve_video(req.id, req.video)
     if len(req.region) != 4:
         raise HTTPException(400, "region 需为 [x, y, w, h]")
-    base = _base(req.video)
+    base = _base(video)
     frames_dir = os.path.join(WORK, base + "_frames")
     timeline = ocr_region_over_time(
-        req.video, tuple(req.region), frames_dir, fps=req.fps, min_score=req.min_score,
+        video, tuple(req.region), frames_dir, fps=req.fps, min_score=req.min_score,
     )
     events = dedupe_lines(timeline)
     numbers = [{"time": t, "value": v, "raw": r} for t, v, r in track_numbers(timeline)]
-    return {"frames": len(timeline), "events": events, "numbers": numbers}
+    result = {"frames": len(timeline), "events": events, "numbers": numbers}
+    if req.id:
+        lib.save_result(req.id, "heat", result)  # 缓存供再次进入分析视图直接展示
+    return result
+
+
+# ---------- 视频库：导入拷贝 / 列表 / 改名 / 删除 / 缩略图 / 流式播放 / 结果缓存 ----------
+
+
+@app.get("/library")
+def library_list():
+    """返回库内全部视频（按 importedAt 倒序）。"""
+    return {"videos": lib.list_videos()}
+
+
+class ImportReq(BaseModel):
+    path: str
+    displayName: str | None = None
+
+
+@app.post("/library/import")
+def library_import(req: ImportReq):
+    """把本地视频拷贝进库、抽缩略图、探测时长/宽高、写 meta，返回 meta。"""
+    try:
+        return lib.import_video(req.path, display_name=req.displayName)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class RenameReq(BaseModel):
+    displayName: str
+
+
+@app.patch("/library/{vid}")
+def library_rename(vid: str, req: RenameReq):
+    """改 displayName，返回 {ok, ...meta}。"""
+    meta = lib.rename(vid, req.displayName)
+    if meta is None:
+        raise HTTPException(404, f"库内视频不存在: {vid}")
+    return {"ok": True, **meta}
+
+
+@app.delete("/library/{vid}")
+def library_delete(vid: str):
+    """删整个 <id> 目录。"""
+    if not lib.delete(vid):
+        raise HTTPException(404, f"库内视频不存在: {vid}")
+    return {"ok": True}
+
+
+@app.get("/library/{vid}/thumb")
+def library_thumb(vid: str):
+    """返回缩略图 thumb.jpg。"""
+    p = lib.thumb_path(vid)
+    if not p:
+        raise HTTPException(404, f"缩略图不存在: {vid}")
+    return FileResponse(p, media_type="image/jpeg")
+
+
+@app.get("/library/{vid}/media")
+def library_media(vid: str):
+    """流式返回库内视频原文件（FileResponse 支持 Range，可拖动）。"""
+    p = lib.video_path(vid)
+    if not p:
+        raise HTTPException(404, f"库内视频不存在: {vid}")
+    return FileResponse(p)
+
+
+@app.get("/library/{vid}/result")
+def library_result(vid: str, kind: str):
+    """返回缓存结果（kind=subtitles|heat），无则返回 {}。"""
+    if kind not in ("subtitles", "heat"):
+        raise HTTPException(400, "kind 需为 subtitles 或 heat")
+    if lib.get(vid) is None:
+        raise HTTPException(404, f"库内视频不存在: {vid}")
+    return lib.load_result(vid, kind)
 
 
 # ---------- 设置：API key 存用户目录、界面可配置与测试连接 ----------

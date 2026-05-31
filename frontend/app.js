@@ -4,7 +4,8 @@ const overlay = $("overlay");
 const regionBox = $("regionBox");
 
 let cues = [];
-let currentVideoPath = "";
+let currentVideoPath = "";  // 旧路径模式：手动加载的本地绝对路径
+let currentVideoId = "";    // 库模式：当前分析的库内视频 id（与 currentVideoPath 互斥）
 let region = null;        // [x, y, w, h] 原始视频像素（唯一真值）
 let regionMode = false;
 let drag = null;          // 画新框时的起点
@@ -44,16 +45,336 @@ function fmt(ms) {
   return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// ---------- 加载视频 ----------
-function loadVideo(path) {
-  if (!path) return;
-  currentVideoPath = path;
-  video.src = "/media?path=" + encodeURIComponent(path);
-  video.load();
-  $("emptyState").classList.add("hidden");
-  $("controls").classList.remove("hidden");
+// 时长（毫秒）-> 人类可读：含小时显示 1:02:03，否则 2:03
+function fmtDuration(ms) {
+  if (!ms || ms <= 0) return "—";
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = String(m).padStart(h ? 2 : 1, "0");
+  const ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
 
-  // 清空上一条视频的字幕与框选状态
+// 导入时间（毫秒）-> 本地短日期
+function fmtDate(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
+// ==================================================================
+//  视图导航：视频库 <-> 分析
+// ==================================================================
+const libraryView = $("libraryView");
+const analysisView = $("analysisView");
+
+function showLibrary() {
+  analysisView.classList.add("hidden");
+  libraryView.classList.remove("hidden");
+  $("backToLibraryBtn").classList.add("hidden");
+  $("advLoader").classList.add("hidden");
+  $("appTitle").textContent = "视频库";
+  // 离开分析：停掉播放、断开视频源，避免后台继续解码/占用
+  try { video.pause(); } catch (_) {}
+  loadLibrary();
+}
+
+function showAnalysis() {
+  libraryView.classList.add("hidden");
+  analysisView.classList.remove("hidden");
+  $("backToLibraryBtn").classList.remove("hidden");
+  $("advLoader").classList.remove("hidden");
+  $("appTitle").textContent = "分析";
+}
+
+$("backToLibraryBtn").onclick = showLibrary;
+
+// ==================================================================
+//  视频库：列表 / 搜索 / 导入 / 重命名 / 删除
+// ==================================================================
+let libraryItems = [];     // 最近一次 GET /library 的结果
+let librarySearchText = "";
+
+async function loadLibrary() {
+  try {
+    const r = await fetch("/library");
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    libraryItems = data.videos || [];
+    renderLibrary();
+  } catch (e) {
+    setLibStatus("加载视频库失败：" + e.message, true);
+  }
+}
+
+function setLibStatus(msg, isError = false) {
+  const el = $("libraryStatus");
+  el.textContent = msg || "";
+  el.classList.toggle("error", isError);
+}
+
+function filteredLibrary() {
+  const q = librarySearchText.trim().toLowerCase();
+  if (!q) return libraryItems;
+  return libraryItems.filter((v) => (v.displayName || "").toLowerCase().includes(q));
+}
+
+function renderLibrary() {
+  const grid = $("libraryGrid");
+  grid.innerHTML = "";
+
+  const total = libraryItems.length;
+  const list = filteredLibrary();
+
+  $("libraryEmpty").classList.toggle("hidden", total !== 0);
+  $("libraryNoMatch").classList.toggle("hidden", !(total !== 0 && list.length === 0));
+
+  list.forEach((v) => grid.appendChild(buildCard(v)));
+}
+
+function buildCard(v) {
+  const card = document.createElement("div");
+  card.className = "vid-card";
+  card.dataset.id = v.id;
+
+  // 缩略图（点击进入分析）
+  const thumbWrap = document.createElement("div");
+  thumbWrap.className = "vid-thumb";
+  const img = document.createElement("img");
+  img.loading = "lazy";
+  img.alt = v.displayName || v.originalName || "";
+  img.src = `/library/${encodeURIComponent(v.id)}/thumb`;
+  img.onerror = () => { thumbWrap.classList.add("noimg"); img.remove(); };
+  thumbWrap.appendChild(img);
+
+  // 时长角标
+  if (v.durationMs) {
+    const dur = document.createElement("span");
+    dur.className = "vid-dur";
+    dur.textContent = fmtDuration(v.durationMs);
+    thumbWrap.appendChild(dur);
+  }
+
+  // 播放图标 hover 提示
+  const playHint = document.createElement("div");
+  playHint.className = "vid-play";
+  playHint.innerHTML = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="rgba(0,0,0,.45)"/><path d="M9.5 7.5v9l7-4.5z" fill="#fff"/></svg>';
+  thumbWrap.appendChild(playHint);
+
+  thumbWrap.onclick = () => enterAnalysis(v);
+
+  // 删除按钮（右上角）
+  const del = document.createElement("button");
+  del.className = "vid-del icon-btn";
+  del.title = "删除";
+  del.setAttribute("aria-label", "删除");
+  del.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  del.onclick = (e) => { e.stopPropagation(); deleteCard(v); };
+  thumbWrap.appendChild(del);
+
+  card.appendChild(thumbWrap);
+
+  // 信息区
+  const meta = document.createElement("div");
+  meta.className = "vid-meta";
+
+  // 就地重命名的标题
+  const name = document.createElement("div");
+  name.className = "vid-name";
+  name.textContent = v.displayName || v.originalName || "(未命名)";
+  name.title = "双击重命名";
+  name.contentEditable = "false";
+  name.spellcheck = false;
+  enableRename(name, v);
+
+  const sub = document.createElement("div");
+  sub.className = "vid-sub";
+  const dot = v.durationMs ? " · " : "";
+  sub.textContent = `${fmtDuration(v.durationMs)}${dot}${fmtDate(v.importedAt)}`;
+
+  meta.append(name, sub);
+  card.appendChild(meta);
+  return card;
+}
+
+// 双击标题进入编辑，回车 / 失焦提交（PATCH /library/{id}）
+function enableRename(nameEl, v) {
+  let committing = false;
+
+  nameEl.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    nameEl.contentEditable = "true";
+    nameEl.classList.add("editing");
+    nameEl.focus();
+    document.getSelection().selectAllChildren(nameEl);
+  });
+
+  const commit = async () => {
+    if (committing) return;
+    committing = true;
+    nameEl.contentEditable = "false";
+    nameEl.classList.remove("editing");
+    const next = nameEl.textContent.replace(/\n/g, " ").trim();
+    if (!next || next === (v.displayName || "")) {
+      nameEl.textContent = v.displayName || v.originalName || "(未命名)";
+      committing = false;
+      return;
+    }
+    try {
+      const r = await fetch(`/library/${encodeURIComponent(v.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: next }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const meta = await r.json();
+      v.displayName = meta.displayName ?? next;
+      // 同步本地缓存里的该条
+      const it = libraryItems.find((x) => x.id === v.id);
+      if (it) it.displayName = v.displayName;
+      nameEl.textContent = v.displayName;
+      // 重命名可能影响搜索过滤结果
+      if (librarySearchText.trim()) renderLibrary();
+    } catch (e) {
+      setLibStatus("重命名失败：" + e.message, true);
+      nameEl.textContent = v.displayName || v.originalName || "(未命名)";
+    } finally {
+      committing = false;
+    }
+  };
+
+  nameEl.addEventListener("blur", commit);
+  nameEl.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); nameEl.blur(); }
+    if (e.key === "Escape") {
+      nameEl.textContent = v.displayName || v.originalName || "(未命名)";
+      nameEl.contentEditable = "false";
+      nameEl.classList.remove("editing");
+      nameEl.blur();
+    }
+  });
+  // 编辑态下点击不要冒泡到缩略图（避免进入分析）
+  nameEl.addEventListener("click", (e) => { if (nameEl.isContentEditable) e.stopPropagation(); });
+}
+
+async function deleteCard(v) {
+  const label = v.displayName || v.originalName || "该视频";
+  if (!confirm(`删除「${label}」？\n这会从视频库移除它及其分析结果，不影响你磁盘上的原始文件。`)) return;
+  try {
+    const r = await fetch(`/library/${encodeURIComponent(v.id)}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+    libraryItems = libraryItems.filter((x) => x.id !== v.id);
+    renderLibrary();
+    setLibStatus("已删除");
+  } catch (e) {
+    setLibStatus("删除失败：" + e.message, true);
+  }
+}
+
+// 搜索：即时过滤
+$("librarySearch").addEventListener("input", (e) => {
+  librarySearchText = e.target.value;
+  renderLibrary();
+});
+
+// ---------- 导入：点按钮选文件 / 拖拽 ----------
+$("importBtn").onclick = () => $("libraryPicker").click();
+
+$("libraryPicker").addEventListener("change", (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  importFiles(files);
+});
+
+const libraryDrop = $("libraryDrop");
+libraryDrop.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  libraryDrop.classList.add("drag-over");
+});
+libraryDrop.addEventListener("dragleave", (e) => {
+  if (e.target === libraryDrop || !libraryDrop.contains(e.relatedTarget)) {
+    libraryDrop.classList.remove("drag-over");
+  }
+});
+libraryDrop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  libraryDrop.classList.remove("drag-over");
+  importFiles([...e.dataTransfer.files]);
+});
+
+// 逐个导入（Electron 渲染进程的 File 带绝对路径 .path）
+async function importFiles(files) {
+  const paths = files.map((f) => f.path).filter(Boolean);
+  if (!paths.length) {
+    setLibStatus("没有可导入的视频文件（拖入的需是本地视频）", true);
+    return;
+  }
+  setLibStatus(`正在导入 ${paths.length} 个视频…`);
+  let ok = 0, fail = 0;
+  for (const p of paths) {
+    try {
+      const r = await fetch("/library/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: p }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      ok++;
+    } catch (e) {
+      fail++;
+      console.warn("导入失败", p, e);
+    }
+  }
+  await loadLibrary();
+  setLibStatus(fail ? `导入完成：成功 ${ok}，失败 ${fail}` : `已导入 ${ok} 个视频`, fail > 0);
+}
+
+// ---------- 点卡片进入分析：加载库内媒体 + 拉缓存结果 ----------
+async function enterAnalysis(v) {
+  showAnalysis();
+  loadVideo(undefined, v.id);
+  setStatus(`已加载：${v.displayName || v.originalName || ""}`);
+  // 有缓存（字幕 / 区域热度）则直接渲染，省一次重算
+  await Promise.allSettled([loadCachedSubtitles(v.id), loadCachedHeat(v.id)]);
+}
+
+async function loadCachedSubtitles(id) {
+  try {
+    const r = await fetch(`/library/${encodeURIComponent(id)}/result?kind=subtitles`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data && Array.isArray(data.cues) && data.cues.length) {
+      cues = data.cues;
+      renderCues();
+      rebuildExports();
+      $("subExport").classList.remove("hidden");
+      lastActiveIndex = -1;
+      setPrimary(null);
+      setStatus(`已载入缓存字幕：${cues.length} 条`);
+    }
+  } catch (_) { /* 无缓存忽略 */ }
+}
+
+async function loadCachedHeat(id) {
+  try {
+    const r = await fetch(`/library/${encodeURIComponent(id)}/result?kind=heat`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data && Array.isArray(data.events)) {
+      // 与 /ocr_region 返回结构一致：{frames, events, numbers}
+      renderOcr(data);
+    }
+  } catch (_) { /* 无缓存忽略 */ }
+}
+
+// ---------- 清空一条视频的分析状态（字幕 / 框选 / OCR） ----------
+function resetAnalysisState() {
   cues = [];
   $("cueList").innerHTML = '<li class="empty-hint">点「生成字幕」开始。</li>';
   $("subtitle").textContent = "";
@@ -67,17 +388,35 @@ function loadVideo(path) {
   $("regionInfo").textContent = "";
   lastActiveIndex = -1;
   lastEvtIndex = -1;
+}
+
+// ---------- 加载视频 ----------
+// 库模式：loadVideo(undefined, id)；旧路径模式：loadVideo(path)
+function loadVideo(path, id) {
+  if (!path && !id) return;
+  currentVideoId = id || "";
+  currentVideoPath = id ? "" : path;
+  video.src = id ? `/library/${encodeURIComponent(id)}/media`
+                 : "/media?path=" + encodeURIComponent(path);
+  video.load();
+  $("emptyState").classList.add("hidden");
+  $("controls").classList.remove("hidden");
+
+  resetAnalysisState();
 
   setPrimary($("transcribeBtn"));   // 刚加载视频：生成字幕是此刻该点的
   setStatus("已加载视频");
 }
+
+// 当前分析对象是否有效（库 id 或本地路径）
+function hasVideo() { return !!(currentVideoId || currentVideoPath); }
 
 $("loadBtn").onclick = () => loadVideo($("videoPath").value.trim());
 $("videoPath").addEventListener("keydown", (e) => {
   if (e.key === "Enter") loadVideo($("videoPath").value.trim());
 });
 
-// 文件选择（隐藏 input，Electron 渲染进程的 File 带绝对路径 .path）
+// 分析视图内手动选文件（隐藏 input，Electron 渲染进程的 File 带绝对路径 .path）
 $("filePicker").addEventListener("change", (e) => {
   const f = e.target.files[0];
   if (f && f.path) loadVideo(f.path);
@@ -85,7 +424,7 @@ $("filePicker").addEventListener("change", (e) => {
 });
 $("emptyState").addEventListener("click", () => $("filePicker").click());
 
-// 拖拽导入
+// 分析视图内拖拽：直接加载该本地路径（不入库）
 const stage = $("stage");
 stage.addEventListener("dragover", (e) => {
   e.preventDefault();
@@ -184,14 +523,14 @@ function seekTo(sec) {
 
 // ---------- 功能一：生成字幕 ----------
 $("transcribeBtn").onclick = async () => {
-  if (!currentVideoPath) return alert("请先加载视频");
+  if (!hasVideo()) return alert("请先加载视频");
   const restore = beginBtn($("transcribeBtn"), "生成中…");
   setStatus("正在生成字幕…", true);
   try {
     const r = await fetch("/transcribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: currentVideoPath }),
+      body: JSON.stringify(currentVideoId ? { id: currentVideoId } : { video: currentVideoPath }),
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
@@ -317,7 +656,7 @@ function refreshOcrButton() {
     setPrimary($("ocrBtn"));
   } else {
     $("ocrBtn").classList.add("hidden");
-    setPrimary(regionMode ? null : (currentVideoPath && !cues.length ? $("transcribeBtn") : null));
+    setPrimary(regionMode ? null : (hasVideo() && !cues.length ? $("transcribeBtn") : null));
   }
 }
 
@@ -438,7 +777,10 @@ $("ocrBtn").onclick = async () => {
     const r = await fetch("/ocr_region", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: currentVideoPath, region, fps: 2.0, min_score: 0.5 }),
+      body: JSON.stringify({
+        ...(currentVideoId ? { id: currentVideoId } : { video: currentVideoPath }),
+        region, fps: 2.0, min_score: 0.5,
+      }),
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
@@ -574,7 +916,8 @@ function isTyping() {
 }
 document.addEventListener("keydown", (e) => {
   if (isTyping()) return;
-  if (e.code === "Space" && currentVideoPath) { e.preventDefault(); togglePlay(); return; }
+  if (libraryView && !libraryView.classList.contains("hidden")) return; // 库视图不接管播放快捷键
+  if (e.code === "Space" && hasVideo()) { e.preventDefault(); togglePlay(); return; }
   if (e.key === "r" || e.key === "R") { e.preventDefault(); $("regionModeBtn").onclick(); return; }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     const lis = [...$("cueList").querySelectorAll("li[data-index]")];
@@ -682,3 +1025,6 @@ $("apiKeyTest").onclick = async () => {
     restore();
   }
 };
+
+// ---------- 启动：默认进视频库首页 ----------
+loadLibrary();
