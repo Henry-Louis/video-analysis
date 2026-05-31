@@ -29,5 +29,9 @@ sample/
 # 编译产物
 native/vision-ocr/vision-ocr
 
+# PyInstaller 打包中间产物（dist/ 已在上面忽略）
+build/
+*.spec
+
 # OS
 .DS_Store

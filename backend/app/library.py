@@ -37,7 +37,7 @@ import subprocess
 import time
 
 from . import config as cfg
-from .media import ffmpeg_bin, ffprobe_bin
+from .media import _probe, ffmpeg_bin
 
 # 允许导入的视频扩展名（小写，含点）
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".flv", ".ts", ".wmv"}
@@ -98,38 +98,6 @@ def _source_path(vid: str) -> str | None:
     return hits[0] if hits else None
 
 
-def _probe_dimensions(path: str) -> tuple[int | None, int | None]:
-    """用 ffprobe 取首个视频流的宽高；失败返回 (None, None)。"""
-    try:
-        out = subprocess.run(
-            [ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "json", str(path)],
-            check=True, capture_output=True, text=True,
-        )
-        streams = (json.loads(out.stdout) or {}).get("streams") or []
-        if streams:
-            w = streams[0].get("width")
-            h = streams[0].get("height")
-            return (int(w) if w else None, int(h) if h else None)
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        pass
-    return (None, None)
-
-
-def _probe_duration_ms(path: str) -> int | None:
-    """用 ffprobe 取时长（毫秒）；失败返回 None。"""
-    try:
-        out = subprocess.run(
-            [ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=nw=1:nk=1", str(path)],
-            check=True, capture_output=True, text=True,
-        )
-        sec = float(out.stdout.strip() or 0.0)
-        return int(round(sec * 1000)) if sec > 0 else None
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        return None
-
-
 def _make_thumb(src: str, out_jpg: str, width: int = _THUMB_WIDTH) -> bool:
     """抽一帧缩略图（缩到指定宽、高自适应保持比例）；成功返回 True。"""
     try:
@@ -162,8 +130,7 @@ def import_video(src: str, *, display_name: str | None = None) -> dict:
         shutil.copy2(src, dst)
 
         _make_thumb(dst, os.path.join(entry, "thumb.jpg"))
-        width, height = _probe_dimensions(dst)
-        duration_ms = _probe_duration_ms(dst)
+        duration_ms, width, height = _probe(dst)  # 一趟 ffmpeg 取时长+宽高，不依赖 ffprobe
 
         original_name = os.path.basename(src)
         name = (display_name or "").strip() or os.path.splitext(original_name)[0]

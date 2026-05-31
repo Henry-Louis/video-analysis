@@ -7,6 +7,10 @@ uvicorn[standard]>=0.29
 pydantic>=2
 python-dotenv
 
+# ===== 可移植 ffmpeg：自带 macOS arm64 ffmpeg 二进制（含 libass，可烧字幕） =====
+# 让打包后的 .app 脱离 Homebrew/项目 .venv 也能抽帧/抽音轨/探测/烧字幕。
+imageio-ffmpeg>=0.5
+
 # ===== 功能二：本地中文 OCR（改用系统 Vision 框架，无 Python 依赖） =====
 # OCR 不再用 PaddleOCR/paddlepaddle，改为调用本机 macOS Vision：
 # 源码 native/vision-ocr/main.swift，编译：

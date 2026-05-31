@@ -13,6 +13,7 @@
 - GET  /                        前端页面（frontend/）
 """
 import os
+import sys
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -21,19 +22,29 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-BACKEND = os.path.join(HERE, "..")
-ROOT = os.path.join(BACKEND, "..")
-WORK = os.path.join(ROOT, "work")
-FRONTEND = os.path.join(ROOT, "frontend")
+from app import config as cfg                                 # noqa: E402
+
+# 打包态（PyInstaller）下 __file__ 在临时解包目录内，资源根为 sys._MEIPASS，
+# 前端被一并收进该目录的 frontend/；开发态仍用相对项目结构。
+_FROZEN = getattr(sys, "frozen", False)
+if _FROZEN:
+    _BASE = sys._MEIPASS
+    FRONTEND = os.path.join(_BASE, "frontend")
+    # bundle 只读，工作目录改放可写的用户配置目录下
+    WORK = os.path.join(cfg.config_dir(), "work")
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    BACKEND = os.path.join(HERE, "..")
+    ROOT = os.path.join(BACKEND, "..")
+    WORK = os.path.join(ROOT, "work")
+    FRONTEND = os.path.join(ROOT, "frontend")
+    load_dotenv(os.path.join(BACKEND, ".env"))  # 仅开发回退用；打包态不收 .env
 os.makedirs(WORK, exist_ok=True)
-load_dotenv(os.path.join(BACKEND, ".env"))
 
 from app.media import extract_audio, burn_subtitles          # noqa: E402
 from app.asr import transcribe                                # noqa: E402
 from app.subtitle import sentences_to_cues, to_srt, to_vtt    # noqa: E402
 from app.ocr import ocr_region_over_time, dedupe_lines, track_numbers  # noqa: E402
-from app import config as cfg                                 # noqa: E402
 from app import library as lib                                # noqa: E402
 
 app = FastAPI(title="video-analysis")
