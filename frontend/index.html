@@ -158,18 +158,31 @@
     <section class="right">
       <div class="panel">
         <div class="panel-head">
-          <h2>字幕</h2>
+          <h2>口播内容</h2>
           <span id="subExport" class="export hidden">
             导出 <a id="srtLink" href="#" download="subtitle.srt">SRT</a> ·
             <a id="vttLink" href="#" download="subtitle.vtt">VTT</a>
           </span>
         </div>
-        <ul id="cueList" class="cue-list"><li class="empty-hint">加载视频后点「生成字幕」开始。</li></ul>
+
+        <!-- 转录搜索：即时过滤 + 高亮（仅展示层，不改 cue 数据） -->
+        <div id="cueSearchWrap" class="cue-search hidden">
+          <svg class="search-ic" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M16.5 16.5L21 21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <input id="cueSearch" type="search" placeholder="搜索口播内容…" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <!-- 概览：字幕条数 / 覆盖时长 -->
+        <div id="cueOverview" class="cue-overview hidden"></div>
+
+        <ul id="cueList" class="cue-list"><li class="empty-hint">加载视频后点「生成字幕」开始分析口播内容。</li></ul>
       </div>
 
       <div class="panel">
-        <h2>画面区域</h2>
-        <div id="ocrResult" class="ocr-result empty-hint">框选一个区域，再点「开始分析」。</div>
+        <h2>热度趋势</h2>
+        <div id="ocrResult" class="ocr-result empty-hint">框选一个区域，点「开始分析」洞察该区域的热度与文本变化。</div>
       </div>
     </section>
   </main>

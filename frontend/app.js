@@ -13,6 +13,7 @@ let edit = null;          // 编辑已有框（移动/缩放）时的状态
 let lastActiveIndex = -1; // 字幕跟随高亮守卫
 let lastEvtIndex = -1;    // OCR 事件跟随高亮守卫
 let exportUrls = [];      // 需回收的 Blob URL
+let cueQuery = "";        // 口播内容搜索词（仅展示层过滤/高亮，不改 cue 数据）
 
 // ---------- 状态 / 进度反馈 ----------
 function setStatus(msg, busy = false, isError = false) {
@@ -376,12 +377,17 @@ async function loadCachedHeat(id) {
 // ---------- 清空一条视频的分析状态（字幕 / 框选 / OCR） ----------
 function resetAnalysisState() {
   cues = [];
-  $("cueList").innerHTML = '<li class="empty-hint">点「生成字幕」开始。</li>';
+  cueQuery = "";
+  $("cueSearch").value = "";
+  $("cueSearchWrap").classList.add("hidden");
+  $("cueOverview").classList.add("hidden");
+  $("cueOverview").textContent = "";
+  $("cueList").innerHTML = '<li class="empty-hint">点「生成字幕」开始分析口播内容。</li>';
   $("subtitle").textContent = "";
   $("subExport").classList.add("hidden");
   revokeExportUrls();
   $("ocrResult").className = "ocr-result empty-hint";
-  $("ocrResult").textContent = "框选一个区域，再点「开始分析」。";
+  $("ocrResult").textContent = "框选一个区域，点「开始分析」洞察该区域的热度与文本变化。";
   region = null;
   exitRegionMode();
   regionBox.classList.add("hidden");
@@ -548,11 +554,59 @@ $("transcribeBtn").onclick = async () => {
   }
 };
 
+// 转义后按搜索词把命中的子串包成 <mark>（大小写不敏感）。仅用于展示层高亮。
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+}
+function highlightInto(el, text, q) {
+  // 无搜索词：纯文本，保持 contentEditable 编辑体验干净
+  if (!q) { el.textContent = text; return; }
+  const lower = text.toLowerCase(), needle = q.toLowerCase();
+  let html = "", from = 0, idx;
+  while ((idx = lower.indexOf(needle, from)) !== -1) {
+    html += escapeHtml(text.slice(from, idx));
+    html += "<mark>" + escapeHtml(text.slice(idx, idx + needle.length)) + "</mark>";
+    from = idx + needle.length;
+  }
+  html += escapeHtml(text.slice(from));
+  el.innerHTML = html;
+}
+
+// 概览：字幕条数 + 覆盖时长（max(end) - min(begin)，毫秒）
+function renderCueOverview() {
+  const el = $("cueOverview");
+  if (!cues.length) { el.classList.add("hidden"); el.textContent = ""; return; }
+  const begin = Math.min(...cues.map((c) => c.begin_time));
+  const end = Math.max(...cues.map((c) => c.end_time));
+  const coverage = fmtDuration(end - begin);
+  let html = `<span class="ov-item"><b>${cues.length}</b> 条字幕</span>` +
+             `<span class="ov-item">覆盖 <b>${coverage}</b></span>`;
+  if (cueQuery.trim()) {
+    const hits = cues.filter((c) => c.text.toLowerCase().includes(cueQuery.trim().toLowerCase())).length;
+    html += `<span class="ov-item ov-hits">命中 <b>${hits}</b> 条</span>`;
+  }
+  el.innerHTML = html;
+  el.classList.remove("hidden");
+}
+
 function renderCues() {
   const ul = $("cueList");
   ul.innerHTML = "";
-  if (!cues.length) { ul.innerHTML = '<li class="empty-hint">无字幕</li>'; return; }
+  // 搜索框 / 概览：有字幕才显示
+  $("cueSearchWrap").classList.toggle("hidden", !cues.length);
+  renderCueOverview();
+
+  if (!cues.length) { ul.innerHTML = '<li class="empty-hint">暂无口播内容</li>'; return; }
+
+  const q = cueQuery.trim();
+  const needle = q.toLowerCase();
+  let shown = 0;
+
   cues.forEach((c, i) => {
+    // 展示层过滤：搜索时只渲染命中的 cue（不改 cues 数据本身）
+    if (q && !c.text.toLowerCase().includes(needle)) return;
+    shown++;
+
     const li = document.createElement("li");
     li.dataset.index = i;
     const t = document.createElement("span");
@@ -560,7 +614,7 @@ function renderCues() {
     t.textContent = fmt(c.begin_time);
     const span = document.createElement("span");
     span.className = "cue-text";
-    span.textContent = c.text;
+    highlightInto(span, c.text, q);
     span.contentEditable = "true";
     span.spellcheck = false;
     li.append(t, span);
@@ -580,12 +634,15 @@ function renderCues() {
     span.addEventListener("dblclick", (e) => {
       e.stopPropagation();
       if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      // 编辑前去掉高亮 <mark>，避免把标签当成正文编辑进去
+      if (span.querySelector("mark")) span.textContent = c.text;
       span.focus();
       document.getSelection().selectAllChildren(span);
     });
     const commit = () => {
       cues[i].text = span.textContent.replace(/\n/g, " ").trim();
       rebuildExports();
+      renderCueOverview();   // 编辑后命中计数可能变化
     };
     span.addEventListener("input", commit);
     span.addEventListener("blur", commit);
@@ -594,7 +651,19 @@ function renderCues() {
     });
     ul.appendChild(li);
   });
+
+  // 搜索无命中
+  if (q && shown === 0) {
+    ul.innerHTML = `<li class="empty-hint">没有包含「${escapeHtml(q)}」的字幕</li>`;
+  }
 }
+
+// 口播内容搜索：即时过滤 + 高亮（仅展示层）
+$("cueSearch").addEventListener("input", (e) => {
+  cueQuery = e.target.value;
+  lastActiveIndex = -1;   // 列表已重建，重置跟随高亮守卫
+  renderCues();
+});
 
 // ---------- 前端现拼 SRT / VTT（复刻 backend/app/subtitle.py 的 _fmt） ----------
 function pad(n, w) { return String(n).padStart(w, "0"); }
@@ -799,8 +868,38 @@ function renderOcr(data) {
   el.innerHTML = "";
   lastEvtIndex = -1;
 
-  // 文本事件
+  const numbers = (data.numbers || []).filter((p) => Number.isFinite(Number(p.value)));
+
+  // ---- 热度趋势：一等公民图表 ----
+  if (numbers.length) {
+    el.appendChild(buildChart(numbers));
+
+    // 明细（辅助，可折叠）
+    const det = document.createElement("details");
+    det.className = "detail";
+    const sum = document.createElement("summary");
+    sum.textContent = `数值明细（${numbers.length} 个采样点）`;
+    det.appendChild(sum);
+    numbers.forEach((p) => {
+      const d = document.createElement("div");
+      d.className = "evt";
+      const t = document.createElement("span");
+      t.className = "t"; t.textContent = fmt(p.time * 1000);
+      d.append(t, document.createTextNode(p.value));
+      d.onclick = () => { seekTo(p.time); };
+      det.appendChild(d);
+    });
+    el.appendChild(det);
+  } else {
+    const m = document.createElement("div");
+    m.className = "empty-hint";
+    m.textContent = "该区域未识别到可成趋势的数值。换个含数字（如在线人数）的区域再分析。";
+    el.appendChild(m);
+  }
+
+  // ---- 文本事件（弹幕）：辅助区，置于趋势下方 ----
   const evs = document.createElement("div");
+  evs.className = "evt-aux";
   const h = document.createElement("h3");
   h.textContent = `文本事件（去重，${data.events.length} 条）`;
   evs.appendChild(h);
@@ -822,88 +921,146 @@ function renderOcr(data) {
     evs.appendChild(d);
   });
   el.appendChild(evs);
-
-  // 数字时间序列 -> 折线图
-  if (data.numbers && data.numbers.length) {
-    const h3 = document.createElement("h3");
-    h3.textContent = "数字时间序列";
-    el.appendChild(h3);
-    el.appendChild(buildChart(data.numbers));
-
-    // 可折叠明细表
-    const det = document.createElement("details");
-    det.className = "detail";
-    const sum = document.createElement("summary");
-    sum.textContent = "明细";
-    det.appendChild(sum);
-    data.numbers.forEach((p) => {
-      const d = document.createElement("div");
-      d.className = "evt";
-      const t = document.createElement("span");
-      t.className = "t"; t.textContent = fmt(p.time * 1000);
-      d.append(t, document.createTextNode(p.value));
-      d.onclick = () => { seekTo(p.time); };
-      det.appendChild(d);
-    });
-    el.appendChild(det);
-  }
 }
 
-// ---------- inline SVG 折线图 ----------
+// ---------- inline SVG 热度趋势图（一等公民）----------
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(name, attrs) {
+  const e = document.createElementNS(SVGNS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// 紧凑数值标签：1234 -> 1.2k，1200000 -> 1.2M
+function fmtNum(v) {
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "k";
+  return String(v);
+}
+
+// 为纵轴挑选「漂亮」的刻度（1/2/5 × 10^n），返回升序刻度数组
+function niceTicks(min, max, count) {
+  if (min === max) { const v = min; return [v - 1 > 0 ? v - 1 : 0, v, v + 1]; }
+  const span = max - min;
+  const rawStep = span / Math.max(1, count);
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const start = Math.floor(min / step) * step;
+  const end = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = start; v <= end + step * 1e-6; v += step) ticks.push(Math.round(v * 1e6) / 1e6);
+  return ticks;
+}
+
 function buildChart(numbers) {
-  const W = 320, Hh = 120, padL = 6, padR = 6, padT = 12, padB = 14;
+  // 视图坐标（不做非等比拉伸，保证文字清晰）；CSS 控制实际渲染高度
+  const W = 560, H = 240;
+  const padL = 52, padR = 18, padT = 22, padB = 34;   // 给轴标签留白
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+
   const wrap = document.createElement("div");
-  wrap.className = "chart";
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
-  svg.setAttribute("preserveAspectRatio", "none");
+  wrap.className = "chart heat-chart";
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "heat-svg" });
 
   const times = numbers.map((p) => p.time);
   const vals = numbers.map((p) => Number(p.value));
   const tMin = Math.min(...times), tMax = Math.max(...times);
   const vMin = Math.min(...vals), vMax = Math.max(...vals);
-  const tSpan = tMax - tMin || 1, vSpan = vMax - vMin || 1;
-  const X = (t) => padL + ((t - tMin) / tSpan) * (W - padL - padR);
-  const Y = (v) => padT + (1 - (v - vMin) / vSpan) * (Hh - padT - padB);
+  const tSpan = (tMax - tMin) || 1;
 
-  // 基线
-  const base = document.createElementNS(NS, "line");
-  base.setAttribute("class", "axis");
-  base.setAttribute("x1", padL); base.setAttribute("x2", W - padR);
-  base.setAttribute("y1", Hh - padB); base.setAttribute("y2", Hh - padB);
-  svg.appendChild(base);
+  // 纵轴范围用漂亮刻度撑开，避免折线贴边
+  const yTicks = niceTicks(vMin, vMax, 4);
+  const yLo = Math.min(yTicks[0], vMin), yHi = Math.max(yTicks[yTicks.length - 1], vMax);
+  const ySpan = (yHi - yLo) || 1;
 
+  const X = (t) => padL + ((t - tMin) / tSpan) * plotW;
+  const Y = (v) => padT + (1 - (v - yLo) / ySpan) * plotH;
+
+  // --- 横向网格 + 纵轴数值刻度 ---
+  yTicks.forEach((v) => {
+    const y = Y(v);
+    svg.appendChild(svgEl("line", { class: "grid", x1: padL, x2: W - padR, y1: y.toFixed(1), y2: y.toFixed(1) }));
+    const lbl = svgEl("text", { class: "axis-label y", x: padL - 8, y: (y + 3.5).toFixed(1) });
+    lbl.textContent = fmtNum(v);
+    svg.appendChild(lbl);
+  });
+
+  // --- 横轴：时间刻度（mm:ss），最多 ~6 个，均匀分布在数据时间范围上 ---
+  const xCount = Math.min(6, numbers.length);
+  for (let i = 0; i < xCount; i++) {
+    const t = xCount === 1 ? tMin : tMin + (tSpan * i) / (xCount - 1);
+    const x = X(t);
+    svg.appendChild(svgEl("line", { class: "tick", x1: x.toFixed(1), x2: x.toFixed(1), y1: padT + plotH, y2: padT + plotH + 4 }));
+    const lbl = svgEl("text", { class: "axis-label x", x: x.toFixed(1), y: padT + plotH + 18 });
+    lbl.textContent = fmt(t * 1000);
+    svg.appendChild(lbl);
+  }
+  // 轴线
+  svg.appendChild(svgEl("line", { class: "axis", x1: padL, x2: W - padR, y1: padT + plotH, y2: padT + plotH }));
+  svg.appendChild(svgEl("line", { class: "axis", x1: padL, x2: padL, y1: padT, y2: padT + plotH }));
+
+  // --- 面积 + 折线 ---
   const pts = numbers.map((p) => `${X(p.time).toFixed(1)},${Y(Number(p.value)).toFixed(1)}`);
-  // 面积
-  const area = document.createElementNS(NS, "path");
-  area.setAttribute("class", "area");
-  area.setAttribute("d", `M${pts[0]} L${pts.join(" L")} L${X(tMax).toFixed(1)},${Hh - padB} L${X(tMin).toFixed(1)},${Hh - padB} Z`);
-  svg.appendChild(area);
-  // 折线
-  const line = document.createElementNS(NS, "path");
-  line.setAttribute("class", "line");
-  line.setAttribute("d", `M${pts.join(" L")}`);
-  svg.appendChild(line);
+  const baseY = (padT + plotH).toFixed(1);
+  svg.appendChild(svgEl("path", { class: "area",
+    d: `M${X(tMin).toFixed(1)},${baseY} L${pts.join(" L")} L${X(tMax).toFixed(1)},${baseY} Z` }));
+  svg.appendChild(svgEl("path", { class: "line", d: `M${pts.join(" L")}` }));
 
+  // --- 悬停设施：竖向指示线 + 读数气泡 + 高亮点 ---
+  const hoverLine = svgEl("line", { class: "hover-line", x1: 0, x2: 0, y1: padT, y2: padT + plotH, style: "opacity:0" });
+  svg.appendChild(hoverLine);
+  const hoverDot = svgEl("circle", { class: "hover-dot", r: 4.5, cx: 0, cy: 0, style: "opacity:0" });
   const tip = document.createElement("div");
   tip.className = "chart-tip";
 
-  numbers.forEach((p) => {
+  function showAt(p) {
     const cx = X(p.time), cy = Y(Number(p.value));
-    const dot = document.createElementNS(NS, "circle");
-    dot.setAttribute("class", "dot");
-    dot.setAttribute("cx", cx); dot.setAttribute("cy", cy); dot.setAttribute("r", "3");
-    dot.addEventListener("mouseenter", () => {
-      tip.textContent = `${fmt(p.time * 1000)} · ${p.value}`;
-      tip.style.left = (cx / W * 100) + "%";
-      tip.style.top = (cy / Hh * 100) + "%";
-      tip.classList.add("show");
-    });
-    dot.addEventListener("mouseleave", () => tip.classList.remove("show"));
-    dot.addEventListener("click", () => seekTo(p.time));
-    svg.appendChild(dot);
+    hoverLine.setAttribute("x1", cx); hoverLine.setAttribute("x2", cx); hoverLine.style.opacity = 1;
+    hoverDot.setAttribute("cx", cx); hoverDot.setAttribute("cy", cy); hoverDot.style.opacity = 1;
+    tip.textContent = `${fmt(p.time * 1000)} · ${p.value}`;
+    tip.style.left = (cx / W * 100) + "%";
+    tip.style.top = (cy / H * 100) + "%";
+    tip.classList.add("show");
+  }
+  function hideHover() {
+    hoverLine.style.opacity = 0; hoverDot.style.opacity = 0; tip.classList.remove("show");
+  }
+
+  // --- 数据点（纯视觉；交互由下方覆盖层统一就近吸附处理）---
+  numbers.forEach((p) => {
+    svg.appendChild(svgEl("circle", { class: "dot", cx: X(p.time), cy: Y(Number(p.value)), r: 3 }));
   });
+  svg.appendChild(hoverDot);
+
+  // --- 峰值标注（最大值）---
+  let peak = numbers[0];
+  numbers.forEach((p) => { if (Number(p.value) > Number(peak.value)) peak = p; });
+  const px = X(peak.time), py = Y(Number(peak.value));
+  svg.appendChild(svgEl("circle", { class: "peak-dot", cx: px, cy: py, r: 4 }));
+  // 峰值标签：靠右则左对齐避免溢出
+  const nearRight = px > W - padR - 70;
+  const peakLbl = svgEl("text", {
+    class: "peak-label", x: (nearRight ? px - 8 : px + 8).toFixed(1), y: (py - 9).toFixed(1),
+    "text-anchor": nearRight ? "end" : "start",
+  });
+  peakLbl.textContent = `峰值 ${peak.value} @ ${fmt(peak.time * 1000)}`;
+  svg.appendChild(peakLbl);
+
+  // --- 覆盖整个绘图区的透明捕捉层：就近吸附到最接近的采样点 ---
+  const hit = svgEl("rect", { x: padL, y: padT, width: plotW, height: plotH, fill: "transparent", style: "cursor:pointer" });
+  function nearest(clientX) {
+    const r = svg.getBoundingClientRect();
+    const t = tMin + ((clientX - r.left) / r.width * W - padL) / plotW * tSpan;
+    let best = numbers[0], bd = Infinity;
+    for (const p of numbers) { const d = Math.abs(p.time - t); if (d < bd) { bd = d; best = p; } }
+    return best;
+  }
+  hit.addEventListener("mousemove", (e) => showAt(nearest(e.clientX)));
+  hit.addEventListener("mouseleave", hideHover);
+  hit.addEventListener("click", (e) => seekTo(nearest(e.clientX).time));
+  svg.appendChild(hit);
 
   wrap.append(svg, tip);
   return wrap;
