@@ -10,11 +10,14 @@ from http import HTTPStatus
 import dashscope
 from dashscope.audio.asr import Recognition
 
+from app.config import get_api_key
+
 
 def _ensure_key() -> None:
-    key = os.getenv("DASHSCOPE_API_KEY")
+    # 优先用界面配置（用户目录的 config.json），为空再回退环境变量（向后兼容）
+    key = get_api_key() or os.getenv("DASHSCOPE_API_KEY")
     if not key:
-        raise RuntimeError("缺少 DASHSCOPE_API_KEY（请在 backend/.env 配置）")
+        raise RuntimeError("缺少 DashScope API Key（请在设置中配置，或设环境变量 DASHSCOPE_API_KEY）")
     dashscope.api_key = key
 
 

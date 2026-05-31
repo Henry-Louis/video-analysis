@@ -7,9 +7,12 @@ uvicorn[standard]>=0.29
 pydantic>=2
 python-dotenv
 
-# ===== 功能二：本地中文 OCR（PaddleOCR，首次运行自动下载 PP-OCRv5 模型） =====
-paddlepaddle>=3.0
-paddleocr>=3.0
+# ===== 功能二：本地中文 OCR（改用系统 Vision 框架，无 Python 依赖） =====
+# OCR 不再用 PaddleOCR/paddlepaddle，改为调用本机 macOS Vision：
+# 源码 native/vision-ocr/main.swift，编译：
+#   swiftc -O -o native/vision-ocr/vision-ocr native/vision-ocr/main.swift
+# backend/app/ocr.py 通过 subprocess 调用该二进制（找不到会自动编译一次）。
+# 可用环境变量 VA_VISION_OCR 覆盖二进制路径。零额外 pip 依赖、离线可用。
 
 # 注：视频抽帧/抽音轨/烧字幕用系统的 ffmpeg-full（带 libass），
 #     见 README「环境依赖」。

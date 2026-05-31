@@ -438,7 +438,7 @@ $("ocrBtn").onclick = async () => {
     const r = await fetch("/ocr_region", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: currentVideoPath, region, fps: 2.0, min_score: 0.7 }),
+      body: JSON.stringify({ video: currentVideoPath, region, fps: 2.0, min_score: 0.5 }),
     });
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
@@ -588,3 +588,97 @@ document.addEventListener("keydown", (e) => {
   }
 });
 $("cueList").tabIndex = 0;
+
+// ---------- 设置面板：DashScope API Key ----------
+const settingsModal = $("settingsModal");
+
+function setSettingsMsg(msg, kind) {
+  const el = $("settingsMsg");
+  el.textContent = msg || "";
+  el.className = "settings-msg" + (kind ? " " + kind : "");
+}
+
+async function refreshApiKeyState() {
+  const el = $("apiKeyState");
+  try {
+    const r = await fetch("/config");
+    const d = await r.json();
+    if (d.has_api_key) {
+      el.textContent = `已配置（${d.api_key_masked || "已保存"}）`;
+      el.className = "field-hint ok";
+    } else {
+      el.textContent = "尚未配置";
+      el.className = "field-hint warn";
+    }
+  } catch {
+    el.textContent = "无法读取配置";
+    el.className = "field-hint warn";
+  }
+}
+
+function openSettings() {
+  settingsModal.classList.remove("hidden");
+  setSettingsMsg("");
+  $("apiKeyInput").value = "";            // 不回填明文 key
+  $("apiKeyInput").type = "password";
+  refreshApiKeyState();
+  setTimeout(() => $("apiKeyInput").focus(), 30);
+}
+function closeSettings() {
+  settingsModal.classList.add("hidden");
+}
+$("settingsBtn").onclick = openSettings;
+$("settingsClose").onclick = closeSettings;
+$("settingsBackdrop").onclick = closeSettings;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !settingsModal.classList.contains("hidden")) closeSettings();
+});
+
+$("apiKeyReveal").onclick = () => {
+  const inp = $("apiKeyInput");
+  inp.type = inp.type === "password" ? "text" : "password";
+};
+
+async function saveApiKey() {
+  const key = $("apiKeyInput").value.trim();
+  if (!key) { setSettingsMsg("请输入 API Key 再保存", "err"); return false; }
+  const restore = beginBtn($("apiKeySave"), "保存中…");
+  try {
+    const r = await fetch("/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dashscope_api_key: key }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    setSettingsMsg("已保存", "ok");
+    $("apiKeyInput").value = "";
+    await refreshApiKeyState();
+    return true;
+  } catch (e) {
+    setSettingsMsg("保存失败：" + e.message, "err");
+    return false;
+  } finally {
+    restore();
+  }
+}
+$("apiKeySave").onclick = saveApiKey;
+
+$("apiKeyTest").onclick = async () => {
+  // 优先用输入框里的（可能未保存）key 测试；为空则测已保存的
+  const typed = $("apiKeyInput").value.trim();
+  const restore = beginBtn($("apiKeyTest"), "测试中…");
+  setSettingsMsg("正在测试连接…", "");
+  try {
+    const r = await fetch("/config/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(typed ? { dashscope_api_key: typed } : {}),
+    });
+    const d = await r.json();
+    setSettingsMsg(d.message || (d.ok ? "连接成功" : "连接失败"), d.ok ? "ok" : "err");
+  } catch (e) {
+    setSettingsMsg("测试失败：" + e.message, "err");
+  } finally {
+    restore();
+  }
+};

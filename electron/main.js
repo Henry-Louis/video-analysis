@@ -14,11 +14,13 @@ let backend = null;
 
 function startBackend() {
   const py = path.join(ROOT, ".venv", "bin", "python");
+  // 配置目录用 Electron 的 userData（开发与打包都生效），后端据此存读 config.json
+  const env = { ...process.env, VA_CONFIG_DIR: app.getPath("userData") };
   backend = spawn(
     py,
     ["-m", "uvicorn", "app.server:app", "--host", "127.0.0.1",
      "--port", String(PORT), "--app-dir", "backend"],
-    { cwd: ROOT, stdio: "inherit" },
+    { cwd: ROOT, stdio: "inherit", env },
   );
   backend.on("exit", (code) => console.log("[backend] exited:", code));
 }

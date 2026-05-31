@@ -1,46 +1,108 @@
-"""功能二：区域 OCR（本地 PaddleOCR 中文）。
+"""功能二：区域 OCR（本机 macOS Vision，零依赖、离线）。
 
-- get_ocr / ocr_image：单图识别（按置信度过滤）
+- ocr_image：单图识别（调用 native/vision-ocr 二进制，按置信度过滤）
 - ocr_region_over_time：对视频某区域按固定间隔逐帧识别
 - dedupe_lines：跨帧重复文本合并成事件（弹幕去重）
 - track_numbers：从识别文本抽数字，构造时间序列（在线人数等）
+
+OCR 引擎说明：改用系统 Vision 框架（见 native/vision-ocr/main.swift），
+通过 swiftc 编译出的 vision-ocr 二进制识别单图，stdout 输出
+JSON 数组 [{text, confidence, x, y, w, h}]（confidence 0~1，bbox 归一化）。
 """
+import json
+import os
 import re
+import shutil
+import subprocess
+import threading
 
 from .media import extract_region_frames
 
-_ocr = None
+# repo 根：backend/app/ocr.py -> 上两级
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
+_VISION_DIR = os.path.join(_ROOT, "native", "vision-ocr")
+_VISION_BIN_DEFAULT = os.path.join(_VISION_DIR, "vision-ocr")
+_VISION_SRC = os.path.join(_VISION_DIR, "main.swift")
+
+_bin_lock = threading.Lock()
+_resolved_bin = None
 
 
-def get_ocr(lang: str = "ch"):
-    """PaddleOCR 单例（首次创建会加载模型）。"""
-    global _ocr
-    if _ocr is None:
-        from paddleocr import PaddleOCR
-        _ocr = PaddleOCR(
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-            lang=lang,
+def _vision_ocr_bin() -> str:
+    """定位 vision-ocr 二进制。
+
+    1) 环境变量 VA_VISION_OCR；
+    2) repo 根的 native/vision-ocr/vision-ocr；
+    3) 若二进制不存在但 main.swift 在且系统有 swiftc，则自动编译一次再用。
+    """
+    global _resolved_bin
+    if _resolved_bin and os.path.exists(_resolved_bin):
+        return _resolved_bin
+
+    with _bin_lock:
+        if _resolved_bin and os.path.exists(_resolved_bin):
+            return _resolved_bin
+
+        env_bin = os.environ.get("VA_VISION_OCR")
+        if env_bin:
+            if not os.path.exists(env_bin):
+                raise FileNotFoundError(
+                    f"VA_VISION_OCR 指向的二进制不存在: {env_bin}"
+                )
+            _resolved_bin = env_bin
+            return _resolved_bin
+
+        if os.path.exists(_VISION_BIN_DEFAULT):
+            _resolved_bin = _VISION_BIN_DEFAULT
+            return _resolved_bin
+
+        # 自动编译一次
+        if not os.path.exists(_VISION_SRC):
+            raise FileNotFoundError(
+                f"找不到 vision-ocr 二进制，且源码缺失: {_VISION_SRC}"
+            )
+        swiftc = shutil.which("swiftc")
+        if not swiftc:
+            raise FileNotFoundError(
+                "找不到 vision-ocr 二进制，且系统无 swiftc 无法自动编译。"
+                f"请先编译: swiftc -O -o {_VISION_BIN_DEFAULT} {_VISION_SRC}"
+            )
+        subprocess.run(
+            [swiftc, "-O", "-o", _VISION_BIN_DEFAULT, _VISION_SRC],
+            check=True,
         )
-    return _ocr
+        if not os.path.exists(_VISION_BIN_DEFAULT):
+            raise RuntimeError("vision-ocr 自动编译后仍未生成二进制")
+        _resolved_bin = _VISION_BIN_DEFAULT
+        return _resolved_bin
 
 
-def ocr_image(image_path: str, min_score: float = 0.6) -> list:
-    """OCR 单张图片，返回 [(text, score), ...]，按置信度过滤。"""
+def ocr_image(image_path: str, min_score: float = 0.5) -> list:
+    """OCR 单张图片，返回 [(text, score), ...]，按置信度过滤。
+
+    底层调用本机 Vision（native/vision-ocr 二进制）：subprocess 运行 → 解析
+    JSON → 过滤空文本与低于 min_score 的结果 → 返回 [(text, float(score))]。
+    """
+    proc = subprocess.run(
+        [_vision_ocr_bin(), str(image_path)],
+        check=True, capture_output=True,
+    )
+    raw = proc.stdout.decode("utf-8").strip()
+    if not raw:
+        return []
+    items = json.loads(raw)
     out = []
-    for res in get_ocr().predict(image_path):
-        texts = res["rec_texts"] if "rec_texts" in res else []
-        scores = res["rec_scores"] if "rec_scores" in res else []
-        for t, s in zip(texts, scores):
-            t = (t or "").strip()
-            if t and s >= min_score:
-                out.append((t, float(s)))
+    for it in items:
+        text = (it.get("text") or "").strip()
+        score = float(it.get("confidence", 0.0))
+        if text and score >= min_score:
+            out.append((text, score))
     return out
 
 
 def ocr_region_over_time(video_path, region, out_dir, fps: float = 2.0,
-                         min_score: float = 0.6) -> list:
+                         min_score: float = 0.5) -> list:
     """对视频某区域每 1/fps 秒 OCR 一次，返回 [{time, lines:[(text, score)]}]。"""
     frames = extract_region_frames(video_path, out_dir, region=region, fps=fps)
     timeline = []

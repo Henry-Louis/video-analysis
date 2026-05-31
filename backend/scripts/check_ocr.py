@@ -1,36 +1,20 @@
-"""探查 PaddleOCR 3.x 的 API 与输出结构，并在给定图片上测试中文识别。
+"""验证本机 macOS Vision OCR（功能二引擎）。
 
 用法:
     python backend/scripts/check_ocr.py [图片路径]
-默认识别 /tmp/burned_check.png（烧了字幕的帧）。
+默认识别 /tmp/burned_check.png。打印每行文本与置信度（不过滤）。
 """
+import os
 import sys
 
-from paddleocr import PaddleOCR
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+from app.ocr import ocr_image  # noqa: E402
 
 img = sys.argv[1] if len(sys.argv) > 1 else "/tmp/burned_check.png"
-print(f"[INFO] OCR 图片: {img}")
-
-ocr = PaddleOCR(
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    use_textline_orientation=False,
-    lang="ch",
-)
-
-results = ocr.predict(img)
-print(f"[INFO] 返回 {len(results)} 个结果对象")
-for res in results:
-    print("[INFO] 类型:", type(res).__name__)
-    try:
-        print("[INFO] keys:", list(res.keys()))
-    except Exception as e:
-        print("[WARN] 无 keys():", e)
-    try:
-        texts = res["rec_texts"]
-        scores = res["rec_scores"]
-        print("\n[识别文本]")
-        for t, s in zip(texts, scores):
-            print(f"  {s:.3f}  {t}")
-    except Exception as e:
-        print("[WARN] 取 rec_texts/rec_scores 失败:", e)
+print(f"[INFO] OCR 图片: {img}（引擎：macOS Vision）")
+results = ocr_image(img, min_score=0.0)
+if not results:
+    print("[WARN] 未识别到文本")
+for text, score in results:
+    print(f"  {score:.3f}  {text}")
