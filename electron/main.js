@@ -59,7 +59,10 @@ async function ensureBackend() {
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200, height: 900, title: "视频分析",
-    webPreferences: { contextIsolation: true },
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
   });
   win.loadURL(`${BASE}/`);
 }

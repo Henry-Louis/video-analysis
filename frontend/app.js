@@ -309,9 +309,19 @@ libraryDrop.addEventListener("drop", (e) => {
   importFiles([...e.dataTransfer.files]);
 });
 
-// 逐个导入（Electron 渲染进程的 File 带绝对路径 .path）
+// 取「拖入/选择的文件」的本地绝对路径：优先 Electron preload 暴露的 webUtils.getPathForFile
+//（Electron 32+ 已移除 File.path），回退 file.path（兼容旧版 / 纯浏览器调试）。
+function filePath(f) {
+  if (window.va && typeof window.va.getPathForFile === "function") {
+    const p = window.va.getPathForFile(f);
+    if (p) return p;
+  }
+  return f.path || "";
+}
+
+// 逐个导入
 async function importFiles(files) {
-  const paths = files.map((f) => f.path).filter(Boolean);
+  const paths = files.map((f) => filePath(f)).filter(Boolean);
   if (!paths.length) {
     setLibStatus("没有可导入的视频文件（拖入的需是本地视频）", true);
     return;
@@ -425,7 +435,8 @@ $("videoPath").addEventListener("keydown", (e) => {
 // 分析视图内手动选文件（隐藏 input，Electron 渲染进程的 File 带绝对路径 .path）
 $("filePicker").addEventListener("change", (e) => {
   const f = e.target.files[0];
-  if (f && f.path) loadVideo(f.path);
+  const p = f && filePath(f);
+  if (p) loadVideo(p);
   e.target.value = "";
 });
 $("emptyState").addEventListener("click", () => $("filePicker").click());
@@ -443,7 +454,8 @@ stage.addEventListener("drop", (e) => {
   e.preventDefault();
   stage.classList.remove("drag-over");
   const f = e.dataTransfer.files[0];
-  if (f && f.path) loadVideo(f.path);
+  const p = f && filePath(f);
+  if (p) loadVideo(p);
 });
 
 // ---------- 自定义播放控制条 ----------
